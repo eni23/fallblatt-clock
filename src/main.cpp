@@ -5,16 +5,18 @@
 #include "debouncer.cpp"
 
 #include <Rotary.h>   // platformio lib install 275
-#include <DS1307.h>   // platformio lib install 145
-
+#include <DS3231.h>   // platformio lib install 1379
+#include <Wire.h>
 
 // Serial, RS485
 SoftwareSerial rs485(RS485_PIN_RX, RS485_PIN_TX);
 
 // RTC
-DS1307 rtc;
-uint8_t sec, min, hour, day, month;
-uint16_t year;
+DS3231 rtc;
+uint8_t sec, min, hour;
+bool clock_century = false;
+bool clock_pm_flag = false;
+bool clock_has_pm  = false;
 
 // time setting & encoder
 Rotary encoder = Rotary(ENCODER_PIN_UP, ENCODER_PIN_DOWN);
@@ -23,7 +25,14 @@ uint8_t current_enc_state = 0;
 uint8_t current_hour      = 0;
 uint8_t current_min       = 0;
 
-
+// Serial debug macros
+#ifdef ENABLE_SERIAL_DBG
+  #define serial_debug(args...) Serial.print(args);
+  #define serial_debugln(args...) Serial.println(args);
+#else
+  #define serial_debug(args);
+  #define serial_debugln(args);
+#endif
 
 //
 // Fallblatt module functions
@@ -71,6 +80,18 @@ uint8_t calc_min_pos( uint8_t pos ){
 
 
 //
+// RTC Clock functions
+//
+
+
+void rtc_get(){
+    hour  = rtc.getHour(clock_pm_flag, clock_has_pm);
+    min   = rtc.getMinute();
+    sec   = rtc.getSecond();
+}
+
+
+//
 // Encoder functions
 //
 
@@ -113,15 +134,10 @@ void encoder_loop(){
   }
   // if state is 3, save current config
   else if ( current_enc_state == 3 ){
-    rtc.stop();
-    rtc.set(
-      0,
-      current_min,
-      current_hour,
-      14, 4, 2019
-    );
+    rtc.setHour(current_hour);
+    rtc.setMinute(current_min);
+    rtc.setSecond(0);
     delay(50);
-    rtc.start();
     // exit time-setting mode
     current_enc_state = 0;
     digitalWrite( LED_BUILTIN_RX, HIGH );
@@ -150,6 +166,7 @@ void encoder_loop(){
           current_hour = 23;
         }
       }
+      serial_debugln(current_hour);
       panel_goto( MODULE_ADDR_HOUR, current_hour );
     }
 
@@ -171,6 +188,7 @@ void encoder_loop(){
         }
       }
       uint8_t rpos = calc_min_pos( current_min );
+      serial_debugln(current_min);
       panel_goto( MODULE_ADDR_MIN, rpos );
     }
   }
@@ -199,17 +217,22 @@ void setup() {
   sei();
 
   // init serial & rs485 SoftwareSerial
-  Serial.begin( SERIAL_BAUD );
+  #ifdef ENABLE_SERIAL_DBG
+    Serial.begin( SERIAL_BAUD );
+  #endif
+
   rs485.begin( 19200 ); // baudrate for modules is fixed
   rs485.flush();
   Serial.flush();
 
   // real time clock
-  rtc.start();
+  Wire.begin();
+  rtc.setClockMode(false);  // set to 24h
 
   // load time from rtc and display to modules
   delay( 100 );
-  rtc.get( &sec, &min, &hour, &day, &month, &year );
+  rtc_get();
+  //rtc.get( &sec, &min, &hour, &day, &month, &year );
   panel_goto( MODULE_ADDR_HOUR, hour );
   uint8_t rpos = calc_min_pos( min );
   panel_goto( MODULE_ADDR_MIN, rpos );
@@ -231,8 +254,15 @@ void loop() {
   // display time from rtc to modules
   // only updating if not in time-setting mode
   if ( current_enc_state == 0 ){
-    rtc.get( &sec, &min, &hour, &day, &month, &year );
+    rtc_get();
     if (sec == 0){
+      serial_debug("current time is: ");
+      serial_debug(hour);
+      serial_debug(":");
+      serial_debug(min);
+      serial_debug(":");
+      serial_debugln(sec);
+
       panel_goto( MODULE_ADDR_HOUR, hour );
       uint8_t rpos = calc_min_pos(min);
       panel_goto( MODULE_ADDR_MIN, rpos );
